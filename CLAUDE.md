@@ -240,6 +240,10 @@ two clearest.
 
 - [ ] Team size and split (ML / backend / frontend / demo) — fill in.
 - [ ] Razorpay test-mode keys obtained? Which endpoints are actually exercisable?
-- [ ] Which vertical to anchor the story: D2C subscriptions, or B2B receivables?
-      Pick one. A demo that does both does neither.
+- [x] **Vertical: D2C subscriptions.** Decided 21 Aug. Failure mix is
+      insufficient-funds/issuer-down dominant; amounts ₹200–₹5,000 with a planted
+      ₹1.2L outlier to fire the approval gate. Hero action is
+      `RETRY_SALARY_ALIGNED`; hero guardrails are the retry cap and quiet hours.
+      B2B receivables (`B2B_INVOICE_OVERDUE`, the D+3/D+10/D+21 ladder) is out of
+      scope — leave the taxonomy row in place but generate no such transactions.
 - [ ] Hinglish messaging — in scope or cut? (Nice differentiator, cheap to add at step 7.)

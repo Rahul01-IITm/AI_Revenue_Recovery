@@ -1,0 +1,4 @@
+# Step 1 dependencies. Both are named in CLAUDE.md's tech section.
+# Add nothing here without asking — see "Working agreements for Claude Code".
+pydantic>=2.13,<3
+pytest>=9.0,<10
