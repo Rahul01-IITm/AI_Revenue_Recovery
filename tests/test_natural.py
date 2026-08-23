@@ -24,11 +24,27 @@ from simulate.natural import (
 ASSUMPTIONS = Path(__file__).parent.parent / "simulate" / "SIMULATION_ASSUMPTIONS.md"
 
 
-def _parse_column_a() -> dict[str, float]:
-    """Pull `| `CLASS` | **0.30** |` rows out of the frozen assumptions table."""
+def section(heading: str) -> str:
+    """Text of one `## ` section, exclusive of the next.
+
+    Scoping matters: Column B rows are `| `CLASS` | `ACTION` | **0.55** |`, so an
+    unscoped Column A pattern happily matches the *action* token and silently
+    reads the wrong table.
+    """
     text = ASSUMPTIONS.read_text()
+    start = text.index(heading)
+    rest = text[start + len(heading) :]
+    end = rest.find("\n## ")
+    return rest if end == -1 else rest[:end]
+
+
+def _parse_column_a() -> dict[str, float]:
+    """Pull `| `CLASS` | **0.30** |` rows out of the frozen Column A table."""
     pattern = re.compile(r"\|\s*`([A-Z0-9_]+)`\s*\|\s*\*\*([0-9.]+)\*\*\s*\|")
-    return {m.group(1): float(m.group(2)) for m in pattern.finditer(text)}
+    return {
+        m.group(1): float(m.group(2))
+        for m in pattern.finditer(section("## Column A"))
+    }
 
 
 def test_code_matches_the_frozen_assumptions_document():

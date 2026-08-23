@@ -19,7 +19,7 @@ from data.generator import DEFAULT_SEED, generate_batch
 from report.baselines import do_nothing, naive_retry_all
 from report.diagnosis import evaluate
 from report.diagnosis import render as render_diagnosis
-from report.metrics import render
+from report.metrics import render, render_comparison
 
 MODES = ("baseline", "naive", "agent", "diagnose")
 
@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         help="write the generated batch to this JSON path",
     )
     p.add_argument("--no-llm", action="store_true", help="rules-only path (step 7)")
+    p.add_argument("--compare", action="store_true",
+                   help="also show the do-nothing floor and the uplift")
+    p.add_argument("--audit", metavar="TXN_ID", default=None,
+                   help="print the full audit trail for one transaction")
     args = p.parse_args(argv)
 
     batch = generate_batch(n=args.n, seed=args.seed)
@@ -57,15 +61,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "diagnose":
         print(render_diagnosis(evaluate(batch, split=split)))
-    elif args.mode == "baseline":
-        print(render(do_nothing(batch, split=split)))
+        return 0
+
+    if args.mode == "baseline":
+        result = do_nothing(batch, split=split)
     elif args.mode == "naive":
-        print(render(naive_retry_all(batch, split=split)))
+        result = naive_retry_all(batch, split=split)
     else:
-        raise SystemExit(
-            "mode 'agent' lands in build step 4, once the policy engine and "
-            "planner exist."
-        )
+        from runner import run_agent
+
+        result, store = run_agent(batch, split=split)
+        if args.audit:
+            print(store.reconstruct(args.audit))
+
+    print(render(result))
+
+    if args.compare:
+        baseline = do_nothing(batch, split=split)
+        print(render_comparison(baseline, result))
 
     if args.split == "train":
         print(

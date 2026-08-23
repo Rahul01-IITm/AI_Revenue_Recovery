@@ -84,11 +84,22 @@ def test_breakdown_totals_match_the_headline(batch):
     )
 
 
-def test_naive_baseline_is_declared_but_not_faked(batch):
-    """Better an explicit NotImplementedError than a stub returning zeros that
-    silently becomes a published comparison."""
-    with pytest.raises(NotImplementedError, match="build step 5"):
-        naive_retry_all(batch)
+def test_naive_baseline_racks_up_violations(batch):
+    """The honest competitor, and the contrast that sells the policy engine:
+    an unguarded retry loop retries fraud and messages opted-out customers."""
+    result = naive_retry_all(batch, split=None)
+    assert result.violations, "naive should violate something; that is the point"
+    assert result.violations.get("retried_suspected_fraud", 0) > 0
+    assert result.violations.get("messaged_opted_out_customer", 0) > 0
+
+
+def test_agent_commits_no_violations(batch):
+    """The same counters, applied to the agent, must all be zero."""
+    from runner import run_agent
+
+    result, _ = run_agent(batch, split=None)
+    assert result.violations == {}
+    assert result.max_contacts_per_customer <= 3
 
 
 # --- Presentation ------------------------------------------------------------

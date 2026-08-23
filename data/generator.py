@@ -80,6 +80,11 @@ ANNUAL_PRICE_POINTS: list[tuple[Decimal, float]] = [
 #: Share of transactions on an annual plan rather than a monthly one.
 ANNUAL_SHARE = 0.10
 
+#: Share of the batch that has already aged past the 72h recovery window.
+#: Deliberately non-zero: this population is what makes the recovery-window
+#: stopping rule fire visibly rather than being a rule nobody ever sees work.
+STALE_SHARE = 0.15
+
 #: Observable gateway signal per class. Note `GW_05` is shared by DO_NOT_HONOUR
 #: and INSUFFICIENT_FUNDS — real gateways are ambiguous, and the diagnosis layer
 #: has to earn its accuracy rather than reading a clean label.
@@ -294,10 +299,20 @@ def generate_batch(n: int = 500, seed: int = DEFAULT_SEED) -> Batch:
         is_sub = method is PaymentMethod.EMANDATE or rng.random() < 0.70
         code, message = _draw_signal(rng, cls)
 
-        # Spread over the last 7 days across all hours, so some failures land
-        # inside quiet hours (21:00-09:00 IST) and exercise that guardrail.
+        # Age matters more than it looks. The recovery window is 72h, so a
+        # failure older than that is unactionable by definition. Spreading the
+        # batch over a full week made 60% of it stale on arrival and the policy
+        # engine -- correctly -- vetoed almost everything.
+        #
+        # A real at-risk queue is worked continuously, so most rows are fresh.
+        # The stale minority is kept on purpose: it is what makes the
+        # recovery-window stopping rule fire visibly in the demo.
+        if rng.random() < STALE_SHARE:
+            age_hours = rng.randrange(73, 168)
+        else:
+            age_hours = rng.randrange(0, 71)
         ts = REFERENCE_TIME - timedelta(
-            hours=rng.randrange(0, 168), minutes=rng.randrange(0, 60)
+            hours=age_hours, minutes=rng.randrange(0, 60)
         )
 
         txn = Transaction(

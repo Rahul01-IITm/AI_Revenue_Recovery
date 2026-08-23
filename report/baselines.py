@@ -57,9 +57,9 @@ def naive_retry_all(batch: Batch, split: Split | None = "test") -> RunResult:
     is the real claim, and it also demonstrates that naive retry contacts
     opted-out customers and retries fraud.
 
-    Requires the executor and simulator Columns B+ (build step 5).
+    Implemented in `runner.run_naive`; re-exported here so both baselines are
+    reachable from one module.
     """
-    raise NotImplementedError(
-        "naive_retry_all lands in build step 5, once the per-action simulator "
-        "columns exist. Step 1 ships the do-nothing floor only."
-    )
+    from runner import run_naive
+
+    return run_naive(batch, split=split)

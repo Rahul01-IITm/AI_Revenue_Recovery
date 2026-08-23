@@ -50,6 +50,27 @@ class RunResult(BaseModel):
     #: sends real messages, so uplift is reported net rather than gross.
     intervention_cost: Decimal = Decimal("0")
 
+    # --- Agent / naive detail. Empty for the do-nothing floor. ---
+
+    actions_taken: dict[str, int] = {}
+    blocked_by_policy: dict[str, int] = {}
+    """Rule id -> count. A feature to show, not a failure to hide."""
+    stopped_reasons: dict[str, int] = {}
+    escalated_count: int = 0
+    escalated_value: Decimal = Decimal("0")
+    contacts_sent: int = 0
+    max_contacts_per_customer: int = 0
+    """Proves no spam. The message caps make this number small."""
+    counterfactual_recovered: int = 0
+    """Recovered, but would have recovered anyway. Excluded from uplift."""
+    violations: dict[str, int] = {}
+    """Things a compliant agent must never do. Non-empty only for naive."""
+
+    @property
+    def attributable_recovered_count(self) -> int:
+        """Recoveries the intervention can actually claim credit for."""
+        return self.recovered_count - self.counterfactual_recovered
+
     @property
     def recovery_rate_count(self) -> float:
         return self.recovered_count / self.count if self.count else 0.0
