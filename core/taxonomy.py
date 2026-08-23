@@ -54,6 +54,23 @@ class Action(StrEnum):
     STOP = "STOP"
 
 
+class Verdict(StrEnum):
+    """What the policy engine did to a proposed action.
+
+    The planner proposes; the policy engine disposes. Every one of these is
+    logged with the rule that produced it.
+    """
+
+    ALLOW = "ALLOW"
+    """Proceed as proposed."""
+    DEFER = "DEFER"
+    """Same action, later time. Quiet hours produce this."""
+    DOWNGRADE = "DOWNGRADE"
+    """Different, weaker action. The approval threshold produces this."""
+    VETO = "VETO"
+    """Blocked outright. Replaced with STOP."""
+
+
 class Recoverability(StrEnum):
     """Prior on how winnable a failure class is, before per-transaction signals."""
 
@@ -62,6 +79,28 @@ class Recoverability(StrEnum):
     LOW = "LOW"
     NEVER = "NEVER"
 
+
+#: Actions that put a message in front of a human being.
+#:
+#: Opt-out, quiet hours, and both message caps key off this set. Adding an
+#: outbound action without listing it here would silently bypass four guardrails
+#: at once, so `tests/test_policy.py` asserts the set is exhaustive.
+OUTBOUND_ACTIONS: frozenset[Action] = frozenset(
+    {
+        Action.SEND_PAYMENT_LINK,
+        Action.NUDGE_WHATSAPP,
+        Action.NUDGE_EMAIL,
+        Action.REQUEST_INSTRUMENT_UPDATE,
+        Action.REQUEST_MANDATE_RENEWAL,
+        Action.OFFER_PARTIAL_PLAN,
+    }
+)
+
+#: Actions that move money by re-attempting a charge. The retry cap and the
+#: NEVER_RETRY set key off this.
+RETRY_ACTIONS: frozenset[Action] = frozenset(
+    {Action.RETRY, Action.RETRY_SALARY_ALIGNED}
+)
 
 #: Failure classes that must never be retried, whatever the planner proposes.
 #: `CHARGEBACK_OPEN` from the spec is a transaction *state*, not a failure class,

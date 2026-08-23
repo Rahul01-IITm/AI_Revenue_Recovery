@@ -19,11 +19,13 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.taxonomy import (
+    Action,
     Channel,
     FailureClass,
     MandateStatus,
     PaymentMethod,
     Recoverability,
+    Verdict,
 )
 
 Rupees = Annotated[Decimal, Field(ge=0, decimal_places=2)]
@@ -157,6 +159,92 @@ class RecoverabilityAssessment(BaseModel):
 
     factors: tuple[str, ...] = ()
     """Every adjustment that moved the score, for the audit trail."""
+
+
+class PlannedAction(BaseModel):
+    """What the planner proposes. Never executed directly.
+
+    The executor accepts a `PolicyDecision`, not a `PlannedAction`, so there is
+    no code path from planning to money that skips the policy engine.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    txn_id: str
+    action: Action
+    scheduled_at: datetime
+    rationale: str
+    attempt_no: int = Field(ge=1, default=1)
+    """1 for the first intervention on this transaction, 2 for the next rung."""
+
+
+class PolicyDecision(BaseModel):
+    """The policy engine's ruling on one proposed action.
+
+    Carries everything needed to reconstruct the decision after the fact: what
+    was proposed, what was permitted, which rule spoke, and why.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decision_id: str
+    txn_id: str
+    decided_at: datetime
+
+    proposed_action: Action
+    proposed_at: datetime
+
+    verdict: Verdict
+    final_action: Action
+    final_scheduled_at: datetime
+
+    rule_id: str
+    """Which guardrail spoke. `allow:default` when none objected."""
+    reason: str
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.verdict is Verdict.VETO
+
+    @property
+    def changed_anything(self) -> bool:
+        return self.verdict is not Verdict.ALLOW
+
+
+class ExecutionResult(BaseModel):
+    """What actually happened when an authorised action was executed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    txn_id: str
+    decision_id: str
+    idempotency_key: str
+    action: Action
+    executed_at: datetime
+
+    ok: bool
+    replayed: bool = False
+    """True when the idempotency key had already been executed; no side effect
+    occurred and no cost was incurred."""
+
+    channel: Channel | None = None
+    cost: Decimal = Decimal("0")
+    detail: str = ""
+
+
+class Outcome(BaseModel):
+    """Whether the money came back, and what it cost to try."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    txn_id: str
+    recovered: bool
+    amount: Rupees
+    recovered_by: Action | None = None
+    counterfactual: bool = False
+    """True when this transaction would have recovered naturally anyway. Uplift
+    subtracts these, so the agent is not credited for luck."""
+    cost: Decimal = Decimal("0")
 
 
 class Batch(BaseModel):
