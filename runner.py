@@ -170,21 +170,60 @@ def run_naive(
     counters below are what an unguarded system racks up.
     """
     now = batch.generated_at
+    engine = PolicyEngine()
+    shadow_state = RunState()
+    """The real policy engine, consulted and then ignored.
+
+    Naive does not obey policy — that is what makes it naive. But asking the
+    engine what it *would* have said, using the same rules the agent obeys,
+    lets us separate recovery naive earned from recovery it took by doing
+    something we are not willing to do. Reusing the engine rather than
+    re-listing the rules here means the two can never drift apart.
+    """
+
     rows, outcomes = [], []
     actions = Counter()
     contacts = Counter()
     violations = Counter()
     total_cost = Decimal("0")
+    forbidden_count = 0
+    forbidden_amount = Decimal("0")
 
     for txn in batch.select(split):
         cls_truth = batch.true_class(txn.txn_id)
+        seen = classify(txn).failure_class  # what our agent would have known
         recovered = False
         recovered_by: Action | None = None
+        recovered_via_forbidden = False
+
+        def _shadow(action: Action) -> bool:
+            """Would the policy engine have permitted this? Returns True if not.
+
+            Evaluated at `now` -- the moment the batch is processed -- because
+            that is when naive actually acts. Evaluating at `txn.timestamp`
+            would make every action look zero-age and the recovery-window rule
+            could never fire.
+            """
+            planned = PlannedAction(
+                txn_id=txn.txn_id, action=action, scheduled_at=now,
+                rationale="naive (policy not consulted)",
+            )
+            decision = engine.evaluate(txn, planned, shadow_state, now, seen)
+            blocked = (
+                decision.verdict is Verdict.VETO
+                or decision.final_action is not action
+            )
+            # Naive executes regardless, so the budget is consumed either way.
+            shadow_state.record(txn, action, now)
+            return blocked
 
         # Two immediate retries, regardless of failure class.
         for rung in (1, 2):
             actions[Action.RETRY.value] += 1
-            if cls_truth in (FailureClass.SUSPECTED_FRAUD,):
+            blocked = _shadow(Action.RETRY)
+            if blocked:
+                violations["retry_policy_would_have_blocked"] += 1
+            if cls_truth is FailureClass.SUSPECTED_FRAUD:
                 violations["retried_suspected_fraud"] += 1
             if cls_truth is FailureClass.INVALID_ACCOUNT:
                 violations["retried_invalid_account"] += 1
@@ -196,11 +235,12 @@ def run_naive(
                 violations["auto_actioned_above_approval_threshold"] += 1
 
             if not recovered and attempt_succeeds(
-                txn, cls_truth, Action.RETRY, txn.timestamp,
+                txn, cls_truth, Action.RETRY, now,
                 seed=batch.seed, attempt_no=rung,
             ):
                 recovered = True
                 recovered_by = Action.RETRY
+                recovered_via_forbidden = blocked
 
         # One blanket message to anyone with a channel, opt-out ignored.
         if txn.channel_prefs:
@@ -209,14 +249,22 @@ def run_naive(
                 actions[Action.NUDGE_EMAIL.value] += 1
                 total_cost += cost_of(channel)
                 contacts[txn.customer_id] += 1
+                blocked = _shadow(Action.NUDGE_EMAIL)
+                if blocked:
+                    violations["message_policy_would_have_blocked"] += 1
                 if txn.opted_out:
                     violations["messaged_opted_out_customer"] += 1
                 if not recovered and attempt_succeeds(
-                    txn, cls_truth, Action.NUDGE_EMAIL, txn.timestamp,
+                    txn, cls_truth, Action.NUDGE_EMAIL, now,
                     seed=batch.seed, attempt_no=3,
                 ):
                     recovered = True
                     recovered_by = Action.NUDGE_EMAIL
+                    recovered_via_forbidden = blocked
+
+        if recovered and recovered_via_forbidden:
+            forbidden_count += 1
+            forbidden_amount += txn.amount
 
         counterfactual = recovered and recovers_naturally(
             txn, cls_truth, seed=batch.seed
@@ -227,12 +275,16 @@ def run_naive(
         ))
         rows.append((cls_truth, txn.amount, recovered))
 
-    return _assemble(
+    result = _assemble(
         "naive-retry-all", split, batch, rows, outcomes, total_cost,
         actions=dict(actions), blocked={}, stopped={}, contacts=contacts,
         escalated_count=0, escalated_value=Decimal("0"),
         violations=dict(violations),
     )
+    return result.model_copy(update={
+        "forbidden_recovered_count": forbidden_count,
+        "forbidden_recovered_amount": forbidden_amount,
+    })
 
 
 def _assemble(

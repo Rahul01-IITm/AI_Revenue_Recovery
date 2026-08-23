@@ -66,6 +66,26 @@ class RunResult(BaseModel):
     violations: dict[str, int] = {}
     """Things a compliant agent must never do. Non-empty only for naive."""
 
+    forbidden_recovered_count: int = 0
+    forbidden_recovered_amount: Decimal = Decimal("0")
+    """Recovery obtained through an action the policy engine would have blocked.
+
+    Money taken by retrying suspected fraud, auto-charging above the approval
+    threshold, or messaging an opted-out customer is not revenue you get to
+    keep -- it is a liability. Reported separately so the comparison is
+    like-for-like instead of crediting an unguarded system for what it took.
+    """
+
+    @property
+    def compliant_recovered_amount(self) -> Decimal:
+        return self.recovered_amount - self.forbidden_recovered_amount
+
+    @property
+    def compliant_recovery_rate(self) -> float:
+        if self.at_risk == 0:
+            return 0.0
+        return float(self.compliant_recovered_amount / self.at_risk)
+
     @property
     def attributable_recovered_count(self) -> int:
         """Recoveries the intervention can actually claim credit for."""
@@ -143,6 +163,17 @@ def render(result: RunResult) -> str:
         lines += [
             f"  Intervention cost    {rupees(result.intervention_cost)}",
             f"  Net recovered        {rupees(result.net_recovered)}",
+        ]
+
+    if result.forbidden_recovered_count:
+        lines += [
+            "",
+            f"  Recovered via actions policy forbids  "
+            f"{result.forbidden_recovered_count} txns, "
+            f"{rupees(result.forbidden_recovered_amount)}",
+            f"  Compliant recovery only               "
+            f"{rupees(result.compliant_recovered_amount)}"
+            f"  ({result.compliant_recovery_rate:.1%})",
         ]
 
     if result.counterfactual_recovered:
@@ -223,3 +254,42 @@ def render_comparison(baseline: RunResult, candidate: RunResult) -> str:
             "",
         ]
     )
+
+
+def render_three_way(
+    floor: RunResult, naive: RunResult, agent: RunResult
+) -> str:
+    """The honest headline: gross and compliant recovery, side by side.
+
+    Gross is reported because hiding it would be the dishonest move -- on raw
+    recovery the agent and naive are level. The compliant column is the claim
+    that survives scrutiny.
+    """
+    rows = [
+        ("do nothing", floor.net_recovered, floor.recovery_rate_amount,
+         floor.net_recovered, floor.recovery_rate_amount, 0),
+        ("naive retry-all", naive.net_recovered, naive.recovery_rate_amount,
+         naive.compliant_recovered_amount, naive.compliant_recovery_rate,
+         sum(naive.violations.values())),
+        ("agent", agent.net_recovered, agent.recovery_rate_amount,
+         agent.compliant_recovered_amount, agent.compliant_recovery_rate,
+         sum(agent.violations.values())),
+    ]
+    header = (
+        f"  {'mode':<18}{'gross':>11}{'':>8}{'compliant':>12}{'':>8}"
+        f"{'violations':>12}"
+    )
+    lines = ["", header, "  " + "-" * (len(header) - 2)]
+    for name, gross, grate, comp, crate, viol in rows:
+        lines.append(
+            f"  {name:<18}{rupees(gross):>11}{grate:>8.1%}"
+            f"{rupees(comp):>12}{crate:>8.1%}{viol:>12}"
+        )
+    lines += [
+        "",
+        "  Gross credits every recovery, including money taken by retrying",
+        "  fraud, auto-charging above the approval threshold, or messaging",
+        "  opted-out customers. Compliant counts only what policy permits.",
+        "",
+    ]
+    return "\n".join(lines)

@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from core.schemas import Transaction
 from core.taxonomy import Action, FailureClass
-from simulate.natural import P_NATURAL_RECOVERY, _uniform
+from simulate.natural import P_NATURAL_RECOVERY, _uniform, recovers_naturally
 
 C = FailureClass
 A = Action
@@ -119,13 +119,30 @@ def attempt_succeeds(
 ) -> bool:
     """Did this specific intervention recover the money?
 
-    Draw is keyed by `(seed, txn_id, action, attempt)` so it is stable across
-    runs and independent of evaluation order -- the same pairing property that
-    makes the baseline comparison fair.
+    The draw is **nested**, not independent: first ask whether the transaction
+    would have recovered on its own, and only if it would not, draw against the
+    action's lift.
+
+    This matters more than it looks. Drawing a single uniform against the
+    composed probability on its own stream is correct in expectation but wrong
+    per transaction — it lets a row that would have recovered naturally come
+    out *not* recovered once the agent acts, so an intervention can appear to
+    destroy money. Nesting makes any acting mode recover a superset of the
+    natural recoveries, which is what "lift composes with Column A" has meant
+    in SIMULATION_ASSUMPTIONS.md all along.
+
+    The marginal probability is unchanged:
+        P = p_nat + (1 - p_nat) x lift
     """
-    p = recovery_probability(cls, action, scheduled_at, txn.timestamp)
+    if recovers_naturally(txn, cls, seed=seed):
+        # Would have come back anyway. An intervention cannot undo that, and
+        # `Outcome.counterfactual` records it so uplift does not claim credit.
+        return True
+
+    lift = LIFT.get(cls, {}).get(action, 0.0)
+    lift *= timing_multiplier(cls, action, scheduled_at, txn.timestamp)
     stream = f"attempt:{action.value}:{attempt_no}"
-    return _uniform(seed, txn.txn_id, stream) < p
+    return _uniform(seed, txn.txn_id, stream) < lift
 
 
 def action_cost(action: Action, message_cost: Decimal) -> Decimal:

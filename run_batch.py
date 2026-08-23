@@ -21,7 +21,7 @@ from report.diagnosis import evaluate
 from report.diagnosis import render as render_diagnosis
 from report.metrics import render, render_comparison
 
-MODES = ("baseline", "naive", "agent", "diagnose", "drills")
+MODES = ("baseline", "naive", "agent", "diagnose", "drills", "sweep")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="write the generated batch to this JSON path",
     )
+    p.add_argument("--seeds", type=int, default=20,
+                   help="sweep mode: how many seeds to run")
     p.add_argument("--no-llm", action="store_true",
                    help="rules-only: never call the LLM, even if credentials exist")
     p.add_argument("--compare", action="store_true",
@@ -59,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         args.save.parent.mkdir(parents=True, exist_ok=True)
         args.save.write_text(batch.model_dump_json(indent=2))
         print(f"batch written to {args.save}", file=sys.stderr)
+
+    if args.mode == "sweep":
+        from report import sweep as sweep_mod
+
+        print(sweep_mod.render(sweep_mod.sweep(n=args.n, seeds=args.seeds)))
+        return 0
 
     if args.mode == "drills":
         import drills

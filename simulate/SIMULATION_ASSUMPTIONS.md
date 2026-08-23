@@ -68,11 +68,18 @@ several points between modes, and the comparison would be worthless.
 than drawn from a shared stream, filtering to the test split, reordering the
 batch, or parallelising the run cannot change any outcome.
 
-**3. Natural recovery is independent of agent action.** In step 5, an
-intervention's success probability composes with this column rather than
-replacing it — a retry on an `ISSUER_DOWN` transaction that would have
-recovered naturally must not be double-counted as recovered *because of* the
-agent. The uplift metric subtracts the counterfactual.
+**3. An intervention can never destroy recovery.** The draw is *nested*: first
+ask whether the transaction recovers naturally, and only if it does not, draw
+against the action's lift. A transaction that would have come back on its own
+comes back regardless of what the agent does, and `Outcome.counterfactual`
+records it so uplift claims no credit.
+
+The marginal probability is exactly the composition above. What nesting buys is
+per-transaction coherence: an independent draw against the composed probability
+is right on average but lets a naturally-recovering row come out *not* recovered
+once the agent acts — which makes an acting mode able to score below the
+do-nothing floor. Any mode that acts now recovers a superset of the natural
+recoveries.
 
 ---
 
@@ -167,3 +174,4 @@ is the dishonest metric this hackathon is filtering for.
 |---|---|---|
 | 2026-08-22 | Column A written and frozen. | Baseline is now reproducible. |
 | 2026-08-23 | Column B, timing multipliers, and costs written and frozen. Column A untouched. | Agent and naive runs are now reproducible against a fixed floor. |
+| 2026-08-23 | **Bug fix, not a tuning change.** `attempt_succeeds` drew a single uniform against the composed probability on a stream independent of the natural draw, so a transaction that would have recovered on its own could come out unrecovered once the agent acted — the agent scored *below* the do-nothing floor on seed 5. The draw is now nested, matching what "lift composes with Column A" has specified since Column B was written. **No probability in either column changed.** | Acting modes now recover a superset of natural recoveries. All previously quoted figures are superseded. |
