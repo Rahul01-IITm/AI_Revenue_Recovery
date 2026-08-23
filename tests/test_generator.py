@@ -123,6 +123,29 @@ def test_amounts_are_positive_and_two_dp(batch):
         assert t.amount == t.amount.quantize(Decimal("0.01"))
 
 
+def test_value_is_not_dominated_by_a_few_planted_rows(batch):
+    """The value-weighted headline must not hinge on a handful of draws.
+
+    Before the annual tier existed, the three planted Rs.50k+ rows were 39% of
+    total at-risk value, so one of them flipping moved the headline by ~18
+    points. That is not a number worth reporting.
+    """
+    amounts = sorted((t.amount for t in batch.transactions), reverse=True)
+    top3_share = sum(amounts[:3]) / sum(amounts)
+    assert top3_share < Decimal("0.30"), f"top 3 rows are {top3_share:.0%} of value"
+
+
+def test_mid_value_tier_exists(batch):
+    """Annual plans bridge the gap between monthly prices and the planted
+    outliers, so the amount distribution is not barbelled."""
+    mid = [
+        t
+        for t in batch.transactions
+        if Decimal("5000") <= t.amount <= Decimal("50000")
+    ]
+    assert len(mid) >= 20
+
+
 def test_timestamps_span_quiet_and_waking_hours(batch):
     """Quiet hours (21:00-09:00 IST) must be reachable, or that guardrail can
     never fire in the demo."""

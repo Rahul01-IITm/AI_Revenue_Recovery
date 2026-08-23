@@ -23,6 +23,7 @@ from core.taxonomy import (
     FailureClass,
     MandateStatus,
     PaymentMethod,
+    Recoverability,
 )
 
 Rupees = Annotated[Decimal, Field(ge=0, decimal_places=2)]
@@ -106,6 +107,56 @@ class GroundTruth(BaseModel):
     txn_id: str
     true_failure_class: FailureClass
     split: Split
+
+
+class Diagnosis(BaseModel):
+    """What the agent *believes* about a failure, and why.
+
+    `failure_class=None` means the rules could not classify the row. That is a
+    legitimate, auditable outcome — the planner must not auto-act on an
+    undiagnosed transaction. It is also exactly the population the LLM layer
+    (step 7) is meant to improve, which is why it is modelled rather than
+    papered over with a guess.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    txn_id: str
+    failure_class: FailureClass | None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    rule_id: str
+    """Which rule fired. Goes straight into the audit trail."""
+    rationale: str
+    """Human-readable justification, reconstructable after the fact."""
+
+    source: Literal["rules", "llm"] = "rules"
+    """The `--no-llm` path only ever produces `rules`. Step 7 adds the other."""
+
+    @property
+    def is_classified(self) -> bool:
+        return self.failure_class is not None
+
+
+class RecoverabilityAssessment(BaseModel):
+    """How winnable this transaction looks, given the diagnosis and the customer.
+
+    A *signal*, not a decision. The policy engine can still veto a high score,
+    and the planner can still decline to act on one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    txn_id: str
+    score: float = Field(ge=0.0, le=1.0)
+    tier: Recoverability
+    confidence: float = Field(ge=0.0, le=1.0)
+    """Carried through from the diagnosis, deliberately not blended into
+    `score` — a confident low score and a guessed low score warrant different
+    handling, and mixing them destroys that distinction."""
+
+    factors: tuple[str, ...] = ()
+    """Every adjustment that moved the score, for the audit trail."""
 
 
 class Batch(BaseModel):

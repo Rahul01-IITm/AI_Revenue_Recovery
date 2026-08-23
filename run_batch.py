@@ -17,9 +17,11 @@ from pathlib import Path
 
 from data.generator import DEFAULT_SEED, generate_batch
 from report.baselines import do_nothing, naive_retry_all
+from report.diagnosis import evaluate
+from report.diagnosis import render as render_diagnosis
 from report.metrics import render
 
-MODES = ("baseline", "naive", "agent")
+MODES = ("baseline", "naive", "agent", "diagnose")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,16 +55,17 @@ def main(argv: list[str] | None = None) -> int:
         args.save.write_text(batch.model_dump_json(indent=2))
         print(f"batch written to {args.save}", file=sys.stderr)
 
-    if args.mode == "baseline":
-        result = do_nothing(batch, split=split)
+    if args.mode == "diagnose":
+        print(render_diagnosis(evaluate(batch, split=split)))
+    elif args.mode == "baseline":
+        print(render(do_nothing(batch, split=split)))
     elif args.mode == "naive":
-        result = naive_retry_all(batch, split=split)
+        print(render(naive_retry_all(batch, split=split)))
     else:
         raise SystemExit(
-            "mode 'agent' lands in build step 4. Step 1 ships the baseline."
+            "mode 'agent' lands in build step 4, once the policy engine and "
+            "planner exist."
         )
-
-    print(render(result))
 
     if args.split == "train":
         print(

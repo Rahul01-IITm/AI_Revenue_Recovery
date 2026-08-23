@@ -47,7 +47,7 @@ FAILURE_MIX: dict[FailureClass, float] = {
 
 #: Indian D2C subscription prices cluster at psychological price points rather
 #: than spreading uniformly. Weighted toward the low end.
-PRICE_POINTS: list[tuple[Decimal, float]] = [
+MONTHLY_PRICE_POINTS: list[tuple[Decimal, float]] = [
     (Decimal("149.00"), 0.10),
     (Decimal("199.00"), 0.14),
     (Decimal("249.00"), 0.08),
@@ -64,6 +64,21 @@ PRICE_POINTS: list[tuple[Decimal, float]] = [
     (Decimal("2999.00"), 0.02),
     (Decimal("4999.00"), 0.02),
 ]
+
+#: Annual plans. Real D2C services sell these at a discount to the monthly rate,
+#: and they matter here for a measurement reason as much as a realism one:
+#: without a mid-value tier the amount distribution is barbelled, the planted
+#: Rs.50k+ rows dominate total at-risk value, and the value-weighted headline
+#: swings wildly on a handful of draws.
+ANNUAL_PRICE_POINTS: list[tuple[Decimal, float]] = [
+    (Decimal("5999.00"), 0.34),
+    (Decimal("7999.00"), 0.28),
+    (Decimal("9999.00"), 0.26),
+    (Decimal("11999.00"), 0.12),
+]
+
+#: Share of transactions on an annual plan rather than a monthly one.
+ANNUAL_SHARE = 0.10
 
 #: Observable gateway signal per class. Note `GW_05` is shared by DO_NOT_HONOUR
 #: and INSUFFICIENT_FUNDS — real gateways are ambiguous, and the diagnosis layer
@@ -113,6 +128,42 @@ FAILURE_SIGNALS: dict[FailureClass, list[tuple[str, str]]] = {
     ],
 }
 
+#: Genuinely undecidable signals: the gateway text is indistinguishable from a
+#: *different* class's text, so no rule can get these right.
+#:
+#: Without these the batch is perfectly separable by the same rules we wrote to
+#: classify it, diagnosis scores 100%, and the confidence bands mean nothing.
+#: Real issuers return a bare `05` for a balance decline and a bare mandate
+#: error for both expiry and revocation; that irreducible noise belongs in the
+#: data. It is also precisely the population the LLM layer (step 7) must beat.
+AMBIGUOUS_SIGNALS: dict[FailureClass, list[tuple[str, str]]] = {
+    FailureClass.INSUFFICIENT_FUNDS: [
+        ("GW_05", "do not honour"),
+        ("GW_05", "Declined by issuer without reason code"),
+    ],
+    FailureClass.DO_NOT_HONOUR: [
+        ("GW_05", "declined - insufficient balance reported"),
+    ],
+    FailureClass.MANDATE_EXPIRED: [
+        ("GW_MND", "debit authorisation cancelled at bank"),
+    ],
+    FailureClass.MANDATE_REVOKED: [
+        ("GW_MND", "mandate no longer active"),
+    ],
+}
+
+#: Codes no rule recognises. These must come out UNCLASSIFIED rather than
+#: guessed, and they are the step 7 LLM layer's target population.
+UNKNOWN_SIGNALS: list[tuple[str, str]] = [
+    ("GW_UNK", "unspecified processing error"),
+    ("GW_999", "refer to issuer"),
+    ("", "error"),
+]
+
+#: Share of rows carrying an undecidable signal, and a wholly unknown one.
+AMBIGUOUS_SIGNAL_RATE = 0.06
+UNKNOWN_SIGNAL_RATE = 0.02
+
 #: Payment method implied by the failure class, where physics demands it.
 #: `None` means any method is plausible and one is drawn.
 METHOD_FOR_CLASS: dict[FailureClass, PaymentMethod | None] = {
@@ -152,9 +203,33 @@ def _weighted(rng: random.Random, weights: dict) -> object:
 
 
 def _draw_amount(rng: random.Random) -> Decimal:
-    amounts = [a for a, _ in PRICE_POINTS]
-    weights = [w for _, w in PRICE_POINTS]
+    """Draw a subscription price. Annual plans are the mid-value tier."""
+    points = (
+        ANNUAL_PRICE_POINTS
+        if rng.random() < ANNUAL_SHARE
+        else MONTHLY_PRICE_POINTS
+    )
+    amounts = [a for a, _ in points]
+    weights = [w for _, w in points]
     return rng.choices(amounts, weights=weights, k=1)[0]
+
+
+def _draw_signal(rng: random.Random, cls: FailureClass) -> tuple[str, str]:
+    """Draw the observable `(failure_code, failure_message)` for a class.
+
+    Mostly clean signals, with a deliberate minority that are undecidable or
+    unrecognisable. The classifier is expected to lose points on these — that is
+    the point. A diagnosis layer that scores 100% is being graded on data built
+    to suit it.
+    """
+    roll = rng.random()
+    if roll < UNKNOWN_SIGNAL_RATE:
+        return rng.choice(UNKNOWN_SIGNALS)
+    if roll < UNKNOWN_SIGNAL_RATE + AMBIGUOUS_SIGNAL_RATE:
+        confusable = AMBIGUOUS_SIGNALS.get(cls)
+        if confusable:
+            return rng.choice(confusable)
+    return rng.choice(FAILURE_SIGNALS[cls])
 
 
 def _mandate_status_for(
@@ -217,7 +292,7 @@ def generate_batch(n: int = 500, seed: int = DEFAULT_SEED) -> Batch:
 
         method = METHOD_FOR_CLASS[cls] or rng.choice(GENERIC_METHODS)
         is_sub = method is PaymentMethod.EMANDATE or rng.random() < 0.70
-        code, message = rng.choice(FAILURE_SIGNALS[cls])
+        code, message = _draw_signal(rng, cls)
 
         # Spread over the last 7 days across all hours, so some failures land
         # inside quiet hours (21:00-09:00 IST) and exercise that guardrail.
@@ -292,6 +367,14 @@ def _plant_edge_cases(
             return
 
         if cls is not None:
+            # The observable signal must match the new class, or the row is
+            # self-contradictory and the classifier is measured against data
+            # that cannot be got right. Draw a signal unless one was supplied.
+            if "failure_code" not in changes:
+                code, msg = rng.choice(FAILURE_SIGNALS[cls])
+                changes["failure_code"] = code
+                changes.setdefault("failure_message", msg)
+
             # Changing the class can invalidate method and mandate_status. Derive
             # them rather than trusting each call site to remember.
             implied = METHOD_FOR_CLASS[cls]
