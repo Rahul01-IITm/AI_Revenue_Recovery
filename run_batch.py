@@ -44,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="write the generated batch to this JSON path",
     )
-    p.add_argument("--no-llm", action="store_true", help="rules-only path (step 7)")
+    p.add_argument("--no-llm", action="store_true",
+                   help="rules-only: never call the LLM, even if credentials exist")
     p.add_argument("--compare", action="store_true",
                    help="also show the do-nothing floor and the uplift")
     p.add_argument("--audit", metavar="TXN_ID", default=None,
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         from runner import run_agent
 
-        result, store = run_agent(batch, split=split)
+        result, store = run_agent(batch, split=split, use_llm=not args.no_llm)
         if args.audit:
             print(store.reconstruct(args.audit))
 

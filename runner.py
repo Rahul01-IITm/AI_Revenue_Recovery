@@ -40,8 +40,20 @@ def run_agent(
     store: AuditStore | None = None,
     run_id: str = "agent",
     message_writer=None,
+    use_llm: bool = False,
 ) -> tuple[RunResult, AuditStore]:
-    """The agent. Every action passes through the policy engine."""
+    """The agent. Every action passes through the policy engine.
+
+    `use_llm` upgrades diagnosis and message copy. It changes nothing structural:
+    the LLM is consulted only where the rules were weak, and degrades back to
+    them on any failure, so the run completes with the API down.
+    """
+    llm = None
+    if use_llm:
+        from diagnose.llm_classifier import LlmClassifier
+
+        llm = LlmClassifier()
+
     store = store or AuditStore(":memory:")
     engine = PolicyEngine()
     state = RunState()
@@ -59,7 +71,7 @@ def run_agent(
 
     for txn in batch.select(split):
         cls_truth = batch.true_class(txn.txn_id)
-        diagnosis = classify(txn)
+        diagnosis = llm.classify(txn) if llm else classify(txn)
         assessment = assess(txn, diagnosis)
 
         recovered = False
@@ -130,6 +142,13 @@ def run_agent(
         rows.append((cls_truth, txn.amount, recovered))
 
     store.commit()
+    if llm is not None:
+        log_llm = (
+            f"LLM: {llm.stats.escalated} escalated, {llm.stats.accepted} accepted, "
+            f"{llm.stats.degraded} degraded to rules {llm.stats.degradation_reasons}"
+        )
+        print(f"  {log_llm}")
+
     return (
         _assemble(
             "agent", split, batch, rows, outcomes, total_cost,

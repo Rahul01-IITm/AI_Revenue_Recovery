@@ -145,6 +145,13 @@ def render(result: RunResult) -> str:
             f"  Net recovered        {rupees(result.net_recovered)}",
         ]
 
+    if result.counterfactual_recovered:
+        lines += [
+            f"  Would have recovered anyway  {result.counterfactual_recovered}"
+            f"   <- excluded from uplift",
+            f"  Attributable to the agent    {result.attributable_recovered_count}",
+        ]
+
     lines += ["", "  By failure class:", ""]
     header = f"    {'class':<22}{'n':>5}{'at risk':>12}{'recovered':>12}{'rate':>8}"
     lines += [header, "    " + "-" * (len(header) - 4)]
@@ -154,6 +161,46 @@ def render(result: RunResult) -> str:
             f"{rupees(b.at_risk):>12}{rupees(b.recovered_amount):>12}"
             f"{b.rate:>8.1%}"
         )
+
+    if result.actions_taken:
+        lines += ["", "  Actions taken:", ""]
+        for action, n in sorted(result.actions_taken.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {action:<32}{n:>5}")
+
+    if result.blocked_by_policy:
+        # Not a failure list. Every row here is the policy engine doing its job.
+        lines += ["", "  Blocked by policy (a feature, not a bug):", ""]
+        for rule, n in sorted(result.blocked_by_policy.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {rule:<32}{n:>5}")
+
+    if result.stopped_reasons:
+        lines += ["", "  Stopped (gave up), by reason:", ""]
+        for rule, n in sorted(result.stopped_reasons.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {rule:<32}{n:>5}")
+
+    if result.escalated_count:
+        lines += [
+            "",
+            f"  Escalated to human   {result.escalated_count}"
+            f"  worth {rupees(result.escalated_value)}",
+        ]
+
+    if result.contacts_sent:
+        lines += [
+            "",
+            f"  Customer contacts    {result.contacts_sent} total, "
+            f"max {result.max_contacts_per_customer} per customer"
+            f"   <- proves no spam",
+        ]
+
+    lines += ["", "  Policy violations:", ""]
+    if result.violations:
+        for name, n in sorted(result.violations.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {name:<40}{n:>5}")
+        lines.append(f"    {'TOTAL':<40}{sum(result.violations.values()):>5}")
+    else:
+        lines.append("    none")
+
     lines.append("")
     return "\n".join(lines)
 

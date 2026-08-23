@@ -2,3 +2,5 @@
 # Add nothing here without asking — see "Working agreements for Claude Code".
 pydantic>=2.13,<3
 pytest>=9.0,<10
+streamlit>=1.60,<2
+anthropic>=0.75
