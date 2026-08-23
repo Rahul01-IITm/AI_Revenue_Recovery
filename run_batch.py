@@ -21,7 +21,7 @@ from report.diagnosis import evaluate
 from report.diagnosis import render as render_diagnosis
 from report.metrics import render, render_comparison
 
-MODES = ("baseline", "naive", "agent", "diagnose")
+MODES = ("baseline", "naive", "agent", "diagnose", "drills")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,6 +59,13 @@ def main(argv: list[str] | None = None) -> int:
         args.save.parent.mkdir(parents=True, exist_ok=True)
         args.save.write_text(batch.model_dump_json(indent=2))
         print(f"batch written to {args.save}", file=sys.stderr)
+
+    if args.mode == "drills":
+        import drills
+
+        results = drills.run_all(batch)
+        print(drills.render(results))
+        return 0 if all(r.passed for r in results) else 1
 
     if args.mode == "diagnose":
         print(render_diagnosis(evaluate(batch, split=split)))

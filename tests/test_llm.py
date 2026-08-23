@@ -232,3 +232,39 @@ def test_every_outbound_action_has_copy():
 
     for action in OUTBOUND_ACTIONS:
         assert render_template(_txn(), action, link="L"), action
+
+
+def test_circuit_breaker_stops_retrying_a_dead_endpoint():
+    """A 500-row batch must not call a broken API 500 times."""
+    from diagnose.llm_classifier import CIRCUIT_BREAKER_THRESHOLD
+
+    client = _FakeClient(raises=ConnectionError("down"))
+    clf = LlmClassifier(client=client)
+
+    for _ in range(20):
+        clf.classify(_txn())
+
+    assert client.calls == CIRCUIT_BREAKER_THRESHOLD
+    assert clf.stats.circuit_opened is True
+    assert clf.enabled is False
+
+
+def test_a_success_resets_the_breaker():
+    """Two transient blips must not disable the layer for the whole run."""
+    class _Flaky(_FakeClient):
+        def _parse(self, **kwargs):
+            self.calls += 1
+            if self.calls % 2:
+                raise ConnectionError("blip")
+            return SimpleNamespace(
+                parsed_output=_LlmVerdict(
+                    failure_class=FailureClass.DO_NOT_HONOUR,
+                    confidence=0.7, reasoning="ok"),
+                stop_reason=None,
+            )
+
+    clf = LlmClassifier(client=_Flaky())
+    for _ in range(10):
+        clf.classify(_txn())
+    assert clf.stats.circuit_opened is False
+    assert clf.enabled is True

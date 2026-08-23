@@ -85,6 +85,12 @@ class _LlmVerdict(BaseModel):
     )
 
 
+#: Consecutive failures before the layer stops trying for the rest of the run.
+#: A dead endpoint should be detected once, not once per transaction — and a
+#: 500-row batch retrying a broken API 500 times is slow, noisy, and pointless.
+CIRCUIT_BREAKER_THRESHOLD = 3
+
+
 @dataclass
 class LlmStats:
     """What the LLM layer actually did. Reported so its value is measurable."""
@@ -94,6 +100,10 @@ class LlmStats:
     accepted: int = 0
     degraded: int = 0
     degradation_reasons: dict[str, int] = field(default_factory=dict)
+    circuit_opened: bool = False
+    """True when consecutive failures tripped the breaker and the rest of the
+    batch ran rules-only. Surfaced so a degraded run is never mistaken for a
+    healthy one."""
 
     def _degrade(self, reason: str) -> None:
         self.degraded += 1
@@ -107,6 +117,7 @@ class LlmClassifier:
         self.model = model
         self.stats = LlmStats()
         self._client = client
+        self._consecutive_failures = 0
         self.enabled = enabled and (client is not None or self._can_authenticate())
 
         if enabled and not self.enabled:
@@ -191,7 +202,7 @@ class LlmClassifier:
             )
         except Exception as exc:  # noqa: BLE001 - degrade on anything
             self.stats._degrade(type(exc).__name__)
-            log.warning("LLM call failed for %s: %s", txn.txn_id, exc)
+            self._record_failure(exc)
             return None
 
         # A refusal returns HTTP 200 with no usable content. Check before reading.
@@ -210,7 +221,23 @@ class LlmClassifier:
             self.stats._degrade("class_outside_enum")
             return None
 
+        self._consecutive_failures = 0
         return verdict
+
+    def _record_failure(self, exc: Exception) -> None:
+        """Trip the breaker after repeated failures rather than retrying forever."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures < CIRCUIT_BREAKER_THRESHOLD:
+            log.warning("LLM call failed: %s", exc)
+            return
+        if not self.stats.circuit_opened:
+            self.stats.circuit_opened = True
+            self.enabled = False
+            log.warning(
+                "LLM layer disabled after %d consecutive failures (%s). "
+                "Continuing rules-only for the rest of this run.",
+                self._consecutive_failures, type(exc).__name__,
+            )
 
 
 def classify_all(
