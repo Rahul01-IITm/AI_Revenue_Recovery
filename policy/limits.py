@@ -35,6 +35,20 @@ QUIET_HOURS_END = 9
 HUMAN_APPROVAL_THRESHOLD = Decimal("50000.00")
 """At or above this value the agent may not act on its own."""
 
+MAX_HUMAN_ESCALATIONS_PER_RUN = 20
+"""Human review is a bounded resource and the agent may not spend it freely.
+
+At ~15 minutes per review this is roughly five hours of one operator, which is
+a plausible daily budget for a small ops team. Without a cap the agent can
+escalate without limit -- a batch with 200 high-value rows would silently
+commit Rs.30,000 of somebody's time. A guardrails project that bounds retries
+and messages but not human cost has a hole in it.
+
+Because the budget can bind, the runner works the queue in descending
+escalation priority (see `plan.priority`), so the capacity that exists is spent
+on the most valuable transactions rather than on whichever happened to be
+first."""
+
 #: Per-message cost by channel, so recovery is reported net rather than gross.
 #: Indicative Indian rates: WhatsApp utility template, transactional SMS, email.
 MESSAGE_COST: dict[str, Decimal] = {

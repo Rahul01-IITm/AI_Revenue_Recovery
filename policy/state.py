@@ -26,6 +26,7 @@ class RunState:
         self._messages_txn: dict[str, int] = defaultdict(int)
         self._messages_customer: dict[str, list[datetime]] = defaultdict(list)
         self._executed_keys: set[str] = set()
+        self._escalations = 0
 
     # --- Reads ---------------------------------------------------------------
 
@@ -43,6 +44,9 @@ class RunState:
     def already_executed(self, idempotency_key: str) -> bool:
         return idempotency_key in self._executed_keys
 
+    def escalations_used(self) -> int:
+        return self._escalations
+
     # --- Writes --------------------------------------------------------------
 
     def record(
@@ -58,6 +62,8 @@ class RunState:
         if action in OUTBOUND_ACTIONS:
             self._messages_txn[txn.txn_id] += 1
             self._messages_customer[txn.customer_id].append(at)
+        if action is Action.ESCALATE_HUMAN:
+            self._escalations += 1
         if key:
             self._executed_keys.add(key)
 

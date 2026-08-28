@@ -14,7 +14,7 @@ About 5 minutes of commands, plus talking.
 
 ## 0. The one sentence (15s)
 
-> "Across 500 at-risk transactions, our agent recovers **42% of at-risk value**
+> "Across 500 at-risk transactions, our agent recovers **40% of at-risk value**
 > against a **14% do-nothing floor** — averaged over 20 independent seeds, not
 > one lucky run. The naive retry-all every merchant already uses recovers 34%,
 > and racks up 5,463 policy violations doing it. We commit zero. Every decision
@@ -37,22 +37,22 @@ python run_batch.py --mode sweep --seeds 20
   do-nothing floor           14.4%   11.1%    1.9%   41.4%
   naive, gross               33.9%   11.9%   15.3%   57.3%
   naive, compliant only      18.4%    5.7%   11.5%   34.6%
-  agent                      42.2%   13.2%   17.8%   65.6%
+  agent                      40.1%   10.2%   20.1%   61.9%
 
-  agent vs do-nothing              +27.8%   ahead on 20/20 seeds
-  agent vs naive (gross)            +8.4%   ahead on 15/20 seeds
-  agent vs naive (compliant)       +23.8%   ahead on 19/20 seeds
+  agent vs do-nothing              +25.7%   ahead on 20/20 seeds
+  agent vs naive (gross)            +6.2%   ahead on 15/20 seeds
+  agent vs naive (compliant)       +21.7%   ahead on 20/20 seeds
 
   violations   agent 0   naive 5463
 
-  Seeds where the agent loses to naive on gross recovery: 4, 5, 11, 15, 20
+  Seeds where the agent loses to naive on gross recovery: 4, 7, 11, 19, 20
 ```
 
 **Say the last line out loud.** It is the most persuasive thing in the demo:
 
 > "We print the seeds where we lose. On raw recovery we're ahead on 15 of 20 —
-> good, not a clean sweep. The claim that *is* a clean sweep is against the
-> do-nothing floor: 20 out of 20."
+> good, not a clean sweep. Two claims *are* clean sweeps: against the do-nothing
+> floor, and against naive's compliant recovery. Both 20 out of 20."
 
 **The two ways to score naive, and why we show both:**
 
@@ -76,7 +76,7 @@ python run_batch.py --mode naive    --split test
 python run_batch.py --mode agent    --split test --compare
 ```
 
-Seed 42: floor **10.0%**, naive gross **31.4%**, agent **57.6%**.
+Seed 42: floor **10.0%**, naive gross **31.4%**, agent **42.4%**.
 
 **Say out loud, before anyone asks:**
 
@@ -90,7 +90,7 @@ Seed 42: floor **10.0%**, naive gross **31.4%**, agent **57.6%**.
 
 ## 3. The policy engine (60s) — the heart of the pitch
 
-Put `policy/rules.py` on screen. Eleven pure functions, evaluated in order.
+Put `policy/rules.py` on screen. Twelve pure functions, evaluated in order.
 
 > "The planner proposes. This engine disposes. The executor takes a
 > `PolicyDecision`, never a `PlannedAction` — there is no code path from the AI
@@ -103,10 +103,14 @@ Then run the guardrails rather than describing them:
 python run_batch.py --mode drills
 ```
 
-Eleven drills, each with evidence from the real batch. **Read two aloud:**
+Twelve drills, each with evidence from the real batch. **Read two aloud:**
 
 - **₹50k approval gate** — `txn_000007` is ₹120,000 → DOWNGRADE to
   `ESCALATE_HUMAN`. The money is still pursued, by someone accountable.
+- **Human review budget** — at 2,000 transactions, 20 of 20 reviewers used and
+  22 refused for lack of capacity. Average escalated value ₹7,574 vs ₹1,490
+  turned away: the queue is worked highest-value-first, so the cap bites the
+  cheapest rows rather than an arbitrary tail.
 - **Fraud** — `txn_000005` → VETO, and the same line reports that naive
   *would have retried fraud 16 times*. Not a lost sale; a compliance incident.
 
@@ -187,7 +191,7 @@ Identical numbers.
 python -m pytest tests/ -q
 ```
 
-> "236 tests. The highest-value ones are in `tests/test_policy.py` — every
+> "249 tests. The highest-value ones are in `tests/test_policy.py` — every
 > guardrail has a test proving it fires. One parses the simulation assumptions
 > document and fails if the code and the document disagree. And
 > `tests/test_robustness.py` runs the whole comparison across 20 seeds, so a

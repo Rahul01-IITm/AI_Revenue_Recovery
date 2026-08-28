@@ -24,7 +24,11 @@ from diagnose.classifier import classify
 from execute.executor import Executor
 from execute.razorpay_adapter import ApiResponse, RazorpayAdapter
 from policy.engine import PolicyEngine
-from policy.limits import HUMAN_APPROVAL_THRESHOLD, MAX_RETRIES_PER_TXN
+from policy.limits import (
+    HUMAN_APPROVAL_THRESHOLD,
+    MAX_HUMAN_ESCALATIONS_PER_RUN,
+    MAX_RETRIES_PER_TXN,
+)
 from policy.state import RunState
 from runner import run_agent, run_naive
 
@@ -231,6 +235,40 @@ def drill_llm_degradation(batch: Batch) -> DrillResult:
     )
 
 
+def drill_escalation_budget(batch: Batch) -> DrillResult:
+    """Human review is capped, and the cap is spent on the most valuable rows."""
+    big = generate_batch(n=2000, seed=batch.seed)
+    result, store = run_agent(big, split=None)
+    refused = result.stopped_reasons.get("escalation_budget", 0)
+
+    amounts = {t.txn_id: t.amount for t in big.transactions}
+    served = [
+        amounts[r[0]] for r in store.conn.execute(
+            "SELECT DISTINCT txn_id FROM decisions WHERE final_action='ESCALATE_HUMAN'"
+        ).fetchall()
+    ]
+    turned_away = [
+        amounts[r[0]] for r in store.conn.execute(
+            "SELECT DISTINCT txn_id FROM decisions WHERE rule_id='escalation_budget'"
+        ).fetchall()
+    ]
+    richer = (
+        sum(served) / len(served) > sum(turned_away) / len(turned_away)
+        if served and turned_away else False
+    )
+    return DrillResult(
+        "Human review budget is capped and spent well",
+        result.escalated_count <= MAX_HUMAN_ESCALATIONS_PER_RUN
+        and refused > 0 and richer,
+        f"2000 txns: {result.escalated_count}/{MAX_HUMAN_ESCALATIONS_PER_RUN} "
+        f"reviewers used, {refused} refused for no capacity. Average escalated "
+        f"value Rs.{sum(served)/len(served):,.0f} vs Rs."
+        f"{sum(turned_away)/len(turned_away):,.0f} turned away.",
+        "Retries and messages are capped but human time was not. The queue is "
+        "worked highest-value-first so the cap bites the cheapest rows.",
+    )
+
+
 def drill_undiagnosed_escalates(batch: Batch) -> DrillResult:
     txn = _find(batch, lambda t: classify(t).failure_class is None)
     d = _decide(batch, txn, Action.RETRY)
@@ -254,6 +292,7 @@ ALL_DRILLS = (
     drill_idempotency,
     drill_executor_quarantine,
     drill_llm_degradation,
+    drill_escalation_budget,
     drill_undiagnosed_escalates,
 )
 

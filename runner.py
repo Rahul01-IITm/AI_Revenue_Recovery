@@ -24,6 +24,7 @@ from diagnose.recoverability import assess
 from execute.channels import choose_channel, cost_of
 from execute.executor import Executor
 from plan.planner import plan as plan_action
+from plan.priority import order_queue
 from policy.engine import PolicyEngine
 from policy.limits import HUMAN_APPROVAL_THRESHOLD
 from policy.state import RunState
@@ -69,10 +70,22 @@ def run_agent(
     escalated_value = Decimal("0")
     total_cost = Decimal("0")
 
+    # Diagnose everything first, then work the queue highest-value-first.
+    # Human review is capped (MAX_HUMAN_ESCALATIONS_PER_RUN), so the order
+    # decides which transactions get a person. Reordering is safe: every
+    # outcome draw is keyed by txn_id, never pulled from a sequential stream.
+    diagnoses = {}
+    scored = []
     for txn in batch.select(split):
-        cls_truth = batch.true_class(txn.txn_id)
+        # Classify exactly once per transaction. Calling the LLM classifier
+        # twice here would silently double the API bill.
         diagnosis = llm.classify(txn) if llm else classify(txn)
-        assessment = assess(txn, diagnosis)
+        diagnoses[txn.txn_id] = diagnosis
+        scored.append((txn, assess(txn, diagnosis)))
+
+    for txn, assessment in order_queue(scored):
+        cls_truth = batch.true_class(txn.txn_id)
+        diagnosis = diagnoses[txn.txn_id]
 
         recovered = False
         recovered_by: Action | None = None
@@ -108,6 +121,14 @@ def run_agent(
             result = executor.execute(txn, decision, state, now, body)
             store.record_execution(run_id, result)
 
+            if result.replayed:
+                # The idempotency key caught a duplicate: nothing was sent, no
+                # reviewer was queued, no money moved. Counting it would inflate
+                # both the action histogram and the intervention cost -- an
+                # escalation that never happened was still being charged at
+                # HUMAN_REVIEW_COST.
+                continue
+
             actions[decision.final_action.value] += 1
             cost = result.cost
             if decision.final_action is Action.ESCALATE_HUMAN:
@@ -128,6 +149,21 @@ def run_agent(
                 recovered = True
                 recovered_by = decision.final_action
                 break
+
+            if decision.final_action is Action.ESCALATE_HUMAN:
+                # A person owns this now. Continuing to climb the ladder would
+                # propose a second action on a transaction already handed off --
+                # which the idempotency key would reject as a duplicate anyway.
+                break
+
+        if not recovered and recovers_naturally(txn, cls_truth, seed=batch.seed):
+            # The agent took no action, or every action it took failed. The
+            # transaction still recovers at its natural rate -- declining to
+            # chase a customer does not prevent them paying on their own.
+            # Without this the agent can score BELOW the do-nothing floor
+            # purely by exercising restraint, which is nonsense.
+            recovered = True
+            recovered_by = None
 
         counterfactual = recovered and recovers_naturally(
             txn, cls_truth, seed=batch.seed

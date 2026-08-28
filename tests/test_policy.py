@@ -444,4 +444,4 @@ def test_every_guardrail_constant_has_an_enforcing_rule():
     ):
         assert expected in rule_ids, f"{expected} never fired"
 
-    assert len(ORDERED_RULES) == 11
+    assert len(ORDERED_RULES) == 12

@@ -25,6 +25,7 @@ from core.taxonomy import (
 )
 from policy.limits import (
     HUMAN_APPROVAL_THRESHOLD,
+    MAX_HUMAN_ESCALATIONS_PER_RUN,
     MAX_CUSTOMER_MESSAGES_PER_TXN,
     MAX_MESSAGES_PER_CUSTOMER_7D,
     MAX_RETRIES_PER_TXN,
@@ -308,6 +309,42 @@ def rule_human_approval_threshold(
     return None
 
 
+def rule_escalation_budget(
+    txn: Transaction,
+    planned: PlannedAction,
+    state: RunState,
+    now: datetime,
+    failure_class: FailureClass | None = None,
+) -> Ruling | None:
+    """Human review is finite and the agent may not overspend it.
+
+    Runs *after* `rule_human_approval_threshold`, so it also catches actions
+    that were downgraded into an escalation rather than proposed as one. When
+    the budget is gone the transaction stops and says so, which is the honest
+    outcome: there is no person available, and pretending otherwise would queue
+    work nobody will do.
+
+    The runner works the queue in descending escalation priority, so the rows
+    that reach this rule after the budget is exhausted are the least valuable
+    ones, not an arbitrary tail.
+    """
+    if planned.action is not Action.ESCALATE_HUMAN:
+        return None
+    used = state.escalations_used()
+    if used < MAX_HUMAN_ESCALATIONS_PER_RUN:
+        return None
+    return Ruling(
+        verdict=Verdict.VETO,
+        rule_id="escalation_budget",
+        reason=(
+            f"Human review budget exhausted ({used}/"
+            f"{MAX_HUMAN_ESCALATIONS_PER_RUN} used this run); "
+            "no reviewer available for this transaction."
+        ),
+        replacement_action=Action.STOP,
+    )
+
+
 def rule_quiet_hours(
     txn: Transaction,
     planned: PlannedAction,
@@ -350,5 +387,6 @@ ORDERED_RULES = (
     rule_message_cap_per_customer,
     rule_recovery_window,
     rule_human_approval_threshold,
+    rule_escalation_budget,
     rule_quiet_hours,
 )
