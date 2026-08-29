@@ -1,7 +1,7 @@
 # Competitive scan
 
-Other public repos tackling the same brief (or an adjacent one). Kept so we can
-re-check them as they evolve and decide what is worth adopting.
+Other public repos tackling the same brief — payment-failure recovery. Kept so we
+can re-check them as they evolve and decide what is worth adopting.
 
 **Rule for this file:** record what a repo *does* and what is *verifiably absent*,
 checked against its code rather than its README. Several of these repos claim
@@ -21,11 +21,18 @@ Last checked: **29 Aug 2026**.
 | **Ours** | ✓ floor + naive + 20-seed sweep | ✓ 12 enforced rules | ✓ logged reasons | ✓ append-only, trigger-enforced |
 | RecoverAI | ✗ diagnostic only | ~ approval gate real; caps not enforced | ✗ described in UI only | ✓ model + API + UI |
 | prasanna781 | ✗ "potential" only | ✗ | ~ 3-retry rule, unenforced | ✗ |
-| mscbuild | ✗ | ✗ | ✗ | ✗ |
 
 No competitor scanned so far closes the loop from action to measured money. That
 remains our clearest differentiator, and it is the half of the brief that is
 explicitly called out.
+
+### Scope for inclusion
+
+On-track means **payment-failure recovery** for this brief. Adjacent
+revenue-recovery tools that solve a different problem (B2B pipeline leakage,
+churn prediction, dunning-as-a-service) are out of scope for the scoreboard —
+they cannot be compared against the four requirements and including them
+inflates the field. Note the idea if one has a good one; do not score it.
 
 ---
 
@@ -110,32 +117,14 @@ exists to prevent.
 
 ---
 
-## 3. mscbuild/AI-Revenue-Recovery
+## Scanned and dropped
 
-<https://github.com/mscbuild/AI-Revenue-Recovery>
-
-**Different problem.** Despite the name, this is B2B revenue-leakage detection
-from CRM deals and support tickets — not payment-failure recovery. Its data model
-is deals with `stage`, `value`, `last_activity_days`. Not a direct competitor on
-this track.
-
-- **Stack:** Google ADK agent workflow + FastMCP server + Streamlit + FastAPI.
-  ~20 source files.
-- **Flow:** `parse_business_data → format_risk_prompt → revenue_analyst_agent →
-  format_report`, a linear ADK workflow.
-- **1 test function.** Committed `.pyc` files.
-- **Eval harness** (`run_eval.py`): checks whether keywords appear in the LLM's
-  response text. Presence-of-substring is a very weak proxy for correctness.
-
-**Worth noting:** its `SecurityGuardrail` class is the one genuinely interesting
-piece — `on_tool_call` blocks a forbidden-tool list and detects prompt-injection
-strings in tool arguments; `on_tool_end` regex-redacts PII (card numbers, emails)
-from tool output *before it reaches the LLM*.
-
-We are structurally immune to most of this (our LLM never calls tools and never
-reaches the executor), but the **PII-redaction-before-LLM** idea is relevant: we
-currently send `failure_message` and customer context to the classifier without
-scrubbing. Low effort, good story for a compliance-focused track.
+- **mscbuild/AI-Revenue-Recovery** — checked 29 Aug, removed as out of scope.
+  Despite the name it is B2B pipeline-leakage detection from CRM deals and
+  support tickets (data model: deals with `stage`, `value`,
+  `last_activity_days`), not payment-failure recovery. Nothing to compare
+  against the four requirements. One idea was carried over before dropping it —
+  see candidate 2 below.
 
 ---
 
@@ -146,9 +135,12 @@ Ranked by value to the judging bar. None of these are in the code today.
 1. **Evidence grounding on LLM output** (from RecoverAI). Verify that classifier
    rationales reference only real transaction fields, and flag any claim of an
    action that did not occur. Closest thing to a real hallucination guard.
-2. **PII redaction before the LLM call** (from mscbuild). Scrub card-like and
-   email-like patterns from `failure_message` before it leaves our process.
-   Cheap, and it pairs well with the compliance narrative.
+2. **PII redaction before the LLM call.** We send `failure_message` and customer
+   context to the classifier unscrubbed. Scrub card-like and email-like patterns
+   before anything leaves our process. Cheap, and it pairs well with the
+   compliance narrative. (Idea noted from the since-dropped mscbuild repo, whose
+   `SecurityGuardrail` regex-redacted PII from tool output before it reached the
+   model. The gap in our code is real regardless of where the idea came from.)
 3. **Risk detection as an upstream stage** (from RecoverAI). We start from a
    batch of known failures. Detecting *emerging* degradation — success rate
    dropping on a specific bank or method — is a genuinely missing capability,
@@ -156,7 +148,7 @@ Ranked by value to the judging bar. None of these are in the code today.
    5 Sep.
 
 **Explicitly rejected:** supervised recovery-probability models trained on
-simulator-generated labels (see repo 2).
+simulator-generated labels (see prasanna781 above).
 
 ---
 
