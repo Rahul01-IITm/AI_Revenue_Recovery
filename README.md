@@ -49,21 +49,71 @@ reported, because deleting it would be the dishonest move.
 
 ## Architecture
 
+One pipeline with two **independent fallbacks** — the LLM and the Razorpay
+adapter sit at different stages and degrade separately. Neither branches the
+flow, and neither touches policy or money.
+
 ```
-Batch of at-risk transactions (synthetic, seeded)
-   │
-   ├─ [1] Diagnose          rules first; LLM only where rules were weak
-   ├─ [2] Score             recoverability (how likely) + priority (how valuable)
-   ├─ [3] Plan              action + timing from a closed action enum
-   ├─ [4] POLICY ENGINE     12 rules — may VETO, DEFER, or DOWNGRADE anything
-   ├─ [5] Execute           Razorpay test-mode adapter, idempotent
-   ├─ [6] Simulate          frozen probability table
-   └─ [7] Audit             append-only SQLite, enforced by trigger
+                 batch of failed payments (seeded, synthetic)
+                                 │
+   ┌─────────────────────────────▼─────────────────────────────┐
+   │ 1. DIAGNOSE                                               │
+   │    rules classifier (failure_code + message)              │
+   │        │                                                  │
+   │        └─ confidence <= 0.55 or unclassified?             │
+   │              └──> LLM (claude-opus-5) ──┐                 │
+   │                   x fail/refuse/no key ─┴──> back to rules│  <- fallback 1
+   └─────────────────────────────┬─────────────────────────────┘
+                                 v
+   2. SCORE          recoverability (how likely)
+                     priority (how valuable — amount + LTV)
+                                 v
+   3. ORDER          highest-value first  <- so the capped human
+                                             budget is spent well
+                                 v
+   4. PLAN           ladder rung -> action + timing (closed enum)
+                                 │
+                                 v
+   ╔═════════════════════════════════════════════════════════╗
+   ║ 5. POLICY ENGINE — 12 rules                             ║
+   ║    ALLOW │ DEFER │ DOWNGRADE │ VETO                     ║
+   ║    returns a PolicyDecision. No LLM here, ever.         ║
+   ╚═════════════════════════════╤═══════════════════════════╝
+                                 │  (executor accepts only this)
+                                 v
+   ┌─────────────────────────────────────────────────────────┐
+   │ 6. EXECUTE   idempotency key -> replay = no-op          │
+   │    Razorpay adapter: keys present ──> test-mode call    │
+   │                      no keys ───────> offline, labelled │  <- fallback 2
+   └─────────────────────────────┬───────────────────────────┘
+                                 v
+   7. SIMULATE       nested draw: recovers naturally?
+                     else draw against the action's lift
+                                 │
+        ┌────────────────────────┴────────────────────────┐
+        v                                                 v
+   recovered                              not recovered -> next rung
+        │                                                 (max 2)
+        └────────────────┬────────────────────────────────┘
+                         v
+   8. AUDIT      append-only SQLite — decision, execution, outcome
+                         v
+   9. REPORT     vs do-nothing floor + naive competitor, 20 seeds
 ```
 
-**The policy engine sits between the AI and the money.** The executor accepts a
-`PolicyDecision`, never a `PlannedAction`, so there is no code path from
-planning to money that skips it. No LLM is consulted inside the engine.
+Three things in that diagram are load-bearing:
+
+- **Step 5 is the only authoriser.** `Executor.execute` accepts a
+  `PolicyDecision`, never a `PlannedAction`, and re-checks the verdict on
+  arrival — so there is no code path from planning to money that skips the gate.
+  No LLM is consulted inside the engine.
+- **Both fallbacks are silent and total.** `--no-llm` and a missing Razorpay key
+  produce *the same numbers* as a fully-credentialed run. The LLM only sharpens
+  diagnosis on the ~4% of rows the rules found ambiguous; the adapter only
+  changes whether a call is labelled `test` or `offline`.
+- **Step 7's draw is nested**, not independent — natural recovery first, then the
+  action's lift. That is why an agent which declines to act can never score below
+  the do-nothing floor.
 
 ---
 
