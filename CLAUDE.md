@@ -62,35 +62,56 @@ Four hard requirements decomposed:
 
 ## Architecture
 
+One pipeline with two **independent fallbacks**. The LLM and the Razorpay adapter sit at
+different stages and degrade separately — neither branches the flow, and neither touches
+policy or money.
+
 ```
-Batch of at-risk transactions (synthetic, 500+)
-        │
-        ▼
-[1] Ingest & normalise      → canonical Transaction schema
-        │
-        ▼
-[2] Diagnosis layer         → failure class + recoverability score + confidence
-        │                      rules first; LLM only where rules were weak
-        ▼
-[3] Priority / queue order   → escalation priority; scarce capacity spent best-first
-        │
-        ▼
-[4] Intervention planner    → chooses action + timing from the ALLOWED set only
-        │
-        ▼
-[5] Policy engine (GATE)    → 12 hard rules; VETO / DEFER / DOWNGRADE any action
-        │
-        ▼
-[6] Executor                → Razorpay test-mode API / simulated channel adapters
-        │
-        ▼
-[7] Outcome simulator       → probabilistic, calibrated, seeded, documented
-        │
-        ▼
-[8] Ledger + audit store    → append-only, one row per decision and per outcome
-        │
-        ▼
-[9] Dashboard + sweep       → recovery vs baselines, funnel, exceptions, robustness
+                 batch of failed payments (seeded, synthetic)
+                                 │
+   ┌─────────────────────────────▼─────────────────────────────┐
+   │ 1. DIAGNOSE                                               │
+   │    rules classifier (failure_code + message)              │
+   │        │                                                  │
+   │        └─ confidence <= 0.55 or unclassified?             │
+   │              └──> LLM (claude-opus-5) ──┐                 │
+   │                   x fail/refuse/no key ─┴──> back to rules│  <- fallback 1
+   └─────────────────────────────┬─────────────────────────────┘
+                                 v
+   2. SCORE          recoverability (how likely)
+                     priority (how valuable — amount + LTV)
+                                 v
+   3. ORDER          highest-value first  <- so the capped human
+                                             budget is spent well
+                                 v
+   4. PLAN           ladder rung -> action + timing (closed enum)
+                                 │
+                                 v
+   ╔═════════════════════════════════════════════════════════╗
+   ║ 5. POLICY ENGINE — 12 rules                             ║
+   ║    ALLOW │ DEFER │ DOWNGRADE │ VETO                     ║
+   ║    returns a PolicyDecision. No LLM here, ever.         ║
+   ╚═════════════════════════════╤═══════════════════════════╝
+                                 │  (executor accepts only this)
+                                 v
+   ┌─────────────────────────────────────────────────────────┐
+   │ 6. EXECUTE   idempotency key -> replay = no-op          │
+   │    Razorpay adapter: keys present ──> test-mode call    │
+   │                      no keys ───────> offline, labelled │  <- fallback 2
+   └─────────────────────────────┬───────────────────────────┘
+                                 v
+   7. SIMULATE       nested draw: recovers naturally?
+                     else draw against the action's lift
+                                 │
+        ┌────────────────────────┴────────────────────────┐
+        v                                                 v
+   recovered                              not recovered -> next rung
+        │                                                 (max 2)
+        └────────────────┬────────────────────────────────┘
+                         v
+   8. AUDIT      append-only SQLite — decision, execution, outcome
+                         v
+   9. REPORT     vs do-nothing floor + naive competitor, 20 seeds
 ```
 
 **The policy engine sits between the AI and the money. That ordering is the whole point
@@ -100,6 +121,17 @@ the executor directly.
 Enforced structurally: `Executor.execute` accepts a `PolicyDecision`, never a
 `PlannedAction`, and re-checks the verdict on arrival. There is no code path from
 planning to money that skips the gate.
+
+Two properties of the fallbacks that must not regress:
+
+- **Both are silent and total.** `--no-llm` and a missing Razorpay key produce *the same
+  numbers* as a fully-credentialed run. The LLM only sharpens diagnosis on the ~4% of
+  rows the rules found ambiguous; the adapter only changes whether a call is labelled
+  `test` or `offline`. If either ever moves the headline, something has leaked into the
+  decision path that should not be there.
+- **Step 7's draw is nested**, not independent — natural recovery first, then the action's
+  lift. This is what stops an agent that declines to act from scoring below the
+  do-nothing floor. See "Draw mechanics" below.
 
 ## Failure taxonomy → intervention map
 
