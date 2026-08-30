@@ -104,11 +104,13 @@ class CopyWriter:
 
     @staticmethod
     def _can_authenticate() -> bool:
+        """See `LlmClassifier._can_authenticate` — constructing the client is
+        not evidence that credentials exist."""
         try:
             import anthropic
 
-            anthropic.Anthropic()
-            return True
+            client = anthropic.Anthropic()
+            return bool(client.api_key or client.auth_token or client.auth_headers)
         except Exception:  # noqa: BLE001
             return False
 

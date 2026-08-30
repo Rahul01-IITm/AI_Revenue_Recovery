@@ -128,15 +128,19 @@ class LlmClassifier:
 
     @staticmethod
     def _can_authenticate() -> bool:
-        """An unset ANTHROPIC_API_KEY does not prove there are no credentials —
-        the SDK also resolves an `ant auth login` profile. Construct the client
-        and let it tell us."""
+        """Whether credentials actually resolve — not merely whether the SDK imports.
+
+        `anthropic.Anthropic()` constructs successfully with no credentials at
+        all and only fails at request time, so constructing it proves nothing.
+        Ask the client for the auth headers it would send: empty means there is
+        nothing to authenticate with.
+        """
         try:
             import anthropic
 
-            anthropic.Anthropic()
-            return True
-        except Exception:  # noqa: BLE001 - any auth/import failure means rules-only
+            client = anthropic.Anthropic()
+            return bool(client.api_key or client.auth_token or client.auth_headers)
+        except Exception:  # noqa: BLE001 - any import/auth failure means rules-only
             return False
 
     @property

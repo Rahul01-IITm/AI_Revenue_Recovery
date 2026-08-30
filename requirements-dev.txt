@@ -1,0 +1,5 @@
+# Everything in the deployed app, plus the test toolchain.
+-r requirements.txt
+
+pytest>=9.0,<10
+razorpay>=1.4        # only needed to run verify_live.py against test-mode keys

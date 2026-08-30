@@ -160,6 +160,27 @@ streamlit run app/dashboard.py                     # dashboard
 
 Everything runs **offline**. No API key, no network, no Razorpay credentials.
 
+### Deploying the dashboard (Streamlit Community Cloud, free)
+
+The dashboard is deployable as-is — it needs no secrets, writes nothing to disk
+(the audit store runs in `:memory:`), and never calls the LLM.
+
+1. Push to a **public** GitHub repo.
+2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub.
+3. **New app** → this repo → branch `main` → main file path `app/dashboard.py`.
+4. **Advanced settings → Python 3.11 or later.** This one matters:
+   `core/taxonomy.py` uses `enum.StrEnum`, which is 3.11+. An older interpreter
+   fails at import with `ImportError: cannot import name 'StrEnum'`.
+5. Deploy. No secrets to configure.
+
+Resource headroom is comfortable — peak memory is ~48 MB against a ~1 GB limit,
+and the heaviest sweep (2,000 transactions × 30 seeds) takes ~9s. Results are
+cached per configuration, so only the first load of each setting pays that cost.
+
+If you later want the LLM layer live on the deployed app, add
+`ANTHROPIC_API_KEY` under **Settings → Secrets**. It is not required — the
+dashboard runs rules-only and the numbers are identical either way.
+
 ---
 
 ## Diagnosis

@@ -1,6 +1,23 @@
-# Step 1 dependencies. Both are named in CLAUDE.md's tech section.
-# Add nothing here without asking — see "Working agreements for Claude Code".
+# Runtime dependencies — this is what Streamlit Community Cloud installs.
+# Add nothing here without asking: see "Working agreements" in CLAUDE.md.
+#
+# Requires Python >= 3.11 (core/taxonomy.py uses enum.StrEnum). Set this in
+# Community Cloud under Advanced settings when you deploy.
+
 pydantic>=2.13,<3
-pytest>=9.0,<10
 streamlit>=1.60,<2
+
+# Imported directly by app/dashboard.py. They arrive as Streamlit transitive
+# dependencies too, but a chart library the code imports by name belongs in the
+# manifest rather than being inherited by luck.
+altair>=5.0
+pandas>=2.0
+
+# Optional at runtime: the LLM layer lazy-imports it and degrades to rules when
+# absent, and the dashboard never calls it. Listed so `--mode agent` works on a
+# fresh install.
 anthropic>=0.75
+
+# NOT listed, on purpose:
+#   pytest   -> dev only, see requirements-dev.txt
+#   razorpay -> lazy-imported by the adapter, which runs offline without it

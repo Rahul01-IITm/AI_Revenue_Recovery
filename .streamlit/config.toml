@@ -1,0 +1,15 @@
+# Demo theme. Kept minimal and light — a projector washes out dark backgrounds,
+# and the charts are validated against a light surface.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f5f3"
+textColor = "#0b0b0b"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
