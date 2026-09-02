@@ -77,16 +77,35 @@ st.markdown(
 )
 
 
+def _pretty(name: str) -> str:
+    """Enum value -> label. `.title()` alone mangles the acronym to '3Ds'."""
+    return name.replace("_", " ").title().replace("3Ds", "3DS")
+
+
 def _axis(title: str = "", fmt: str | None = None, **kw):
     """Recessive axis styling. `format` is omitted when unset — Altair 6 rejects
     an explicit None rather than treating it as 'use the default'."""
     if fmt is not None:
         kw["format"] = fmt
+    # labelLimit defaults to 180px in Vega, which silently truncates category
+    # names to "INSUFFICIENT F…". A label the reader cannot finish is worse
+    # than a narrower plot.
+    kw.setdefault("labelLimit", 320)
     return alt.Axis(
         title=title, labelColor=INK_MUTED, titleColor=INK_MUTED,
         gridColor=GRID, domainColor=GRID, tickColor=GRID, labelFontSize=11,
         titleFontSize=11, **kw,
     )
+
+
+def _headroom(values, pad: float = 1.18):
+    """An x-scale with room for the direct labels sitting past each bar end.
+
+    Without it Vega sizes the domain to the data and the outermost label is
+    clipped by the plot edge — the top violation bar read "13" instead of "131".
+    """
+    top = max(list(values) + [0])
+    return alt.Scale(domain=[0, top * pad if top else 1])
 
 
 def _chart(c: alt.Chart, height: int) -> alt.Chart:
@@ -96,6 +115,24 @@ def _chart(c: alt.Chart, height: int) -> alt.Chart:
 
 
 # --- Data --------------------------------------------------------------------
+
+
+def _audit_sample(store) -> str:
+    """The audit trail of a transaction worth looking at, from this run.
+
+    Prefers a decision the policy engine changed (a veto or a downgrade) over an
+    uneventful allow, because the panel is there to show the engine working.
+    """
+    for where in (
+        "verdict IN ('VETO','DOWNGRADE')",
+        "1=1",
+    ):
+        row = store.conn.execute(
+            f"SELECT txn_id FROM decisions WHERE {where} ORDER BY txn_id LIMIT 1"
+        ).fetchone()
+        if row:
+            return store.reconstruct(row[0])
+    return ""
 
 
 @st.cache_data(show_spinner="Running the batch…")
@@ -108,7 +145,7 @@ def _single(n: int, seed: int, split: str):
         run_naive(batch, split=s),
         agent,
         evaluate(batch, split=s),
-        store.reconstruct("txn_000007"),
+        _audit_sample(store),
         {t.txn_id: float(t.amount) for t in batch.transactions},
     )
 
@@ -285,7 +322,8 @@ bars = (
     .mark_bar(cornerRadiusEnd=4, height=30)
     .encode(
         y=alt.Y("mode:N", sort=list(comp["mode"]), axis=_axis()),
-        x=alt.X("rate:Q", axis=_axis("recovered, % of at-risk value", ".0%")),
+        x=alt.X("rate:Q", axis=_axis("recovered, % of at-risk value", ".0%"),
+                scale=_headroom(comp["rate"])),
         color=alt.condition(alt.datum.hero, alt.value(AGENT), alt.value(FLOOR)),
         tooltip=[
             alt.Tooltip("mode:N", title=""),
@@ -347,7 +385,8 @@ with right:
             .mark_bar(cornerRadiusEnd=4, height=20, color=CRITICAL)
             .encode(
                 y=alt.Y("violation:N", sort="-x", axis=_axis()),
-                x=alt.X("count:Q", axis=_axis("occurrences")),
+                x=alt.X("count:Q", axis=_axis("occurrences"),
+                        scale=_headroom(v["count"])),
                 tooltip=["violation:N", "count:Q"],
             )
         )
@@ -376,7 +415,7 @@ with f1:
             .mark_bar(cornerRadiusEnd=3, height=17, color=AGENT)
             .encode(
                 y=alt.Y("action:N", sort="-x", axis=_axis()),
-                x=alt.X("n:Q", axis=_axis()),
+                x=alt.X("n:Q", axis=_axis(), scale=_headroom(a_df["n"])),
                 tooltip=["action:N", "n:Q"],
             )
         )
@@ -401,7 +440,7 @@ with f2:
             .mark_bar(cornerRadiusEnd=3, height=17, color=FLOOR)
             .encode(
                 y=alt.Y("rule:N", sort="-x", axis=_axis()),
-                x=alt.X("n:Q", axis=_axis()),
+                x=alt.X("n:Q", axis=_axis(), scale=_headroom(b_df["n"])),
                 tooltip=["rule:N", "n:Q"],
             )
         )
@@ -426,7 +465,7 @@ with f3:
             .mark_bar(cornerRadiusEnd=3, height=17, color=FLOOR)
             .encode(
                 y=alt.Y("reason:N", sort="-x", axis=_axis()),
-                x=alt.X("n:Q", axis=_axis()),
+                x=alt.X("n:Q", axis=_axis(), scale=_headroom(s_df["n"])),
                 tooltip=["reason:N", "n:Q"],
             )
         )
@@ -458,7 +497,7 @@ base_by_class = {b.failure_class: b for b in floor.by_class}
 cls_df = pd.DataFrame(
     [
         {
-            "class": b.failure_class.value.replace("_", " "),
+            "class": _pretty(b.failure_class.value),
             "series": series,
             "rate": rate,
             "at_risk": float(b.at_risk),
@@ -474,7 +513,7 @@ cls_df = pd.DataFrame(
     ]
 )
 sort_order = [
-    b.failure_class.value.replace("_", " ")
+    _pretty(b.failure_class.value)
     for b in sorted(agent.by_class, key=lambda x: -x.at_risk)
 ]
 cls_chart = (
@@ -525,7 +564,7 @@ cal_bars = (
     .encode(
         y=alt.Y("band:N", sort=list(cal["band"]), axis=_axis()),
         x=alt.X("accuracy:Q", axis=_axis("accuracy within band", ".0%"),
-                scale=alt.Scale(domain=[0, 1])),
+                scale=alt.Scale(domain=[0, 1.15])),
         tooltip=["band:N", "correct:Q", "n:Q",
                  alt.Tooltip("accuracy:Q", format=".1%")],
     )
